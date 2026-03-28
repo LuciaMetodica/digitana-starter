@@ -2,7 +2,7 @@
 
 Turn your AI coding assistant into a **cognitive companion** with persistent identity, memory across sessions, and self-awareness.
 
-Born from [Digitana](https://luzdivergente.com), a cognitive AI system that has been running in production daily since early 2025. This starter kit extracts the core patterns that make an AI assistant feel like a *partner* rather than a tool.
+Born from [Digitana](https://digitanacore.luzdivergente.com), a cognitive AI system that has been running in production daily since early 2026. This starter kit extracts the core patterns that make an AI assistant feel like a *partner* rather than a tool.
 
 ## What it does
 
