@@ -1,4 +1,8 @@
-.DS_Store
-*.backup-*
 .env
+*.env
+.DS_Store
 node_modules/
+state/
+memory/sessions/*.session
+memory/sessions/*.count
+memory/sessions/*.started

@@ -1,321 +1,322 @@
 #!/bin/bash
-# digitana-starter setup script
-# Installs a cognitive AI assistant with persistent identity and memory
-# Works with Claude Code (full experience) + Cursor/Aider (basic)
+# Digitana Express — Setup interactivo
+# Instala tu propio asistente de IA personal con Claude Code + Notion
+set -euo pipefail
 
-set -e
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXPRESS_DIR="$HOME/.claude/express"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/config/assistant.json"
-STARTER_HOME="$HOME/.digitana-starter"
+# Source libraries
+source "$REPO_DIR/lib/ui.sh"
+source "$REPO_DIR/lib/os-detect.sh"
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
+header "Digitana Express"
+echo -e "  Vamos a instalar tu asistente de IA personal."
+echo -e "  Necesitas: una computadora, internet, y 15 minutos."
 echo ""
-echo -e "${CYAN}╔══════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   digitana-starter — setup wizard    ║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════╝${NC}"
+pause_continue
+
+# ═══════════════════════════════════════
+# PASO 1: OS y dependencias
+# ═══════════════════════════════════════
+check_all_dependencies
+OS=$(detect_os)
 echo ""
 
-# --- Step 1: Configure assistant identity ---
+# ═══════════════════════════════════════
+# PASO 2: Notion — token y conexion
+# ═══════════════════════════════════════
+mkdir -p "$EXPRESS_DIR"/{lib,scripts,skills,state/sessions,memory,logs}
 
-if [ -f "$CONFIG_FILE" ]; then
-  ASSISTANT_NAME=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['assistant_name'])" 2>/dev/null)
-  USER_NAME=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['user_name'])" 2>/dev/null)
-  echo -e "Found existing config: ${GREEN}$ASSISTANT_NAME${NC} for ${GREEN}$USER_NAME${NC}"
-  read -p "Use this config? (Y/n): " USE_EXISTING
-  if [[ "$USE_EXISTING" =~ ^[Nn] ]]; then
-    rm "$CONFIG_FILE"
+# Source notion-api.sh for later use
+cp "$REPO_DIR/lib/notion-api.sh" "$EXPRESS_DIR/lib/notion-api.sh"
+source "$EXPRESS_DIR/lib/notion-api.sh"
+source "$REPO_DIR/lib/notion-setup.sh"
+
+NOTION_TOKEN=""
+if [ -f "$EXPRESS_DIR/.env" ]; then
+  EXISTING_TOKEN=$(grep '^NOTION_API_TOKEN=' "$EXPRESS_DIR/.env" 2>/dev/null | cut -d= -f2-)
+  if [ -n "$EXISTING_TOKEN" ]; then
+    step "Ya hay un token de Notion configurado."
+    if ask_yn "Queres usar el existente?"; then
+      NOTION_TOKEN="$EXISTING_TOKEN"
+      success "Usando token existente"
+    fi
   fi
 fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "Let's set up your assistant."
-  echo ""
+if [ -z "$NOTION_TOKEN" ]; then
+  NOTION_TOKEN=$(guide_notion_setup)
+  echo "NOTION_API_TOKEN=$NOTION_TOKEN" > "$EXPRESS_DIR/.env"
+  success "Token guardado"
+fi
 
-  read -p "Assistant name (default: Atlas): " INPUT_NAME
-  ASSISTANT_NAME="${INPUT_NAME:-Atlas}"
+export NOTION_API_TOKEN="$NOTION_TOKEN"
 
-  read -p "Your name: " USER_NAME
-  if [ -z "$USER_NAME" ]; then
-    echo "Error: Your name is required."
-    exit 1
+# Find shared page
+ROOT_PAGE=""
+while [ -z "$ROOT_PAGE" ]; do
+  ROOT_PAGE=$(guide_share_page "$NOTION_TOKEN")
+  if [ -z "$ROOT_PAGE" ]; then
+    if ! ask_yn "Queres intentar de nuevo?"; then
+      fail "No se puede continuar sin una pagina compartida."
+      exit 1
+    fi
   fi
+done
 
-  read -p "Assistant personality (default: direct, warm, proactive, structured, honest): " INPUT_PERSONALITY
-  PERSONALITY="${INPUT_PERSONALITY:-direct, warm, proactive, structured, honest}"
+# ═══════════════════════════════════════
+# PASO 3: Crear workspace en Notion
+# ═══════════════════════════════════════
+IDS_FILE="$EXPRESS_DIR/lib/notion-ids.json"
 
-  read -p "Purpose (default: Enhance your capabilities and optimize your workflow): " INPUT_PURPOSE
-  PURPOSE="${INPUT_PURPOSE:-Enhance your capabilities and optimize your workflow}"
-
-  read -p "Communication language (default: en): " INPUT_LANG
-  LANGUAGE="${INPUT_LANG:-en}"
-
-  read -p "Code language (default: en): " INPUT_CODE_LANG
-  CODE_LANGUAGE="${INPUT_CODE_LANG:-en}"
-
-  echo ""
-  echo "Autonomy level:"
-  echo "  1) Conservative — asks before most actions"
-  echo "  2) Balanced — acts on safe things, asks for risky ones (recommended)"
-  echo "  3) Autonomous — acts on most things, asks only for destructive ops"
-  read -p "Choose (1/2/3, default: 2): " INPUT_AUTONOMY
-  case "$INPUT_AUTONOMY" in
-    1) AUTONOMY="conservative" ;;
-    3) AUTONOMY="autonomous" ;;
-    *) AUTONOMY="balanced" ;;
-  esac
-
-  # Save config
-  cat > "$CONFIG_FILE" << EOF
-{
-  "assistant_name": "$ASSISTANT_NAME",
-  "user_name": "$USER_NAME",
-  "personality": "$PERSONALITY",
-  "purpose": "$PURPOSE",
-  "language": "$LANGUAGE",
-  "code_language": "$CODE_LANGUAGE",
-  "autonomy": "$AUTONOMY"
-}
-EOF
-
-  echo -e "${GREEN}Config saved.${NC}"
+if [ -f "$IDS_FILE" ]; then
+  step "Ya existe notion-ids.json"
+  if ask_yn "Queres recrear las bases de datos?" "n"; then
+    setup_notion_workspace "$NOTION_TOKEN" "$ROOT_PAGE" "$IDS_FILE"
+  else
+    success "Usando IDs existentes"
+  fi
 else
-  # Read existing config
-  PERSONALITY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['personality'])" 2>/dev/null)
-  PURPOSE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['purpose'])" 2>/dev/null)
-  LANGUAGE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['language'])" 2>/dev/null)
-  CODE_LANGUAGE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['code_language'])" 2>/dev/null)
-  AUTONOMY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['autonomy'])" 2>/dev/null)
+  setup_notion_workspace "$NOTION_TOKEN" "$ROOT_PAGE" "$IDS_FILE"
 fi
 
-TODAY=$(date +%Y-%m-%d)
+# ═══════════════════════════════════════
+# PASO 4: Datos del negocio
+# ═══════════════════════════════════════
+header "Paso 4: Sobre tu negocio"
+step "Necesito algunos datos para personalizar tu asistente"
+echo ""
 
-# --- Step 2: Create starter home directory ---
+BUSINESS_NAME=""
+BUSINESS_DESC=""
+INDUSTRY=""
+TARGET_CLIENTS=""
+KEY_PROCESSES=""
+COMM_STYLE=""
+ASSISTANT_NAME=""
+USER_NAME=""
+LANGUAGE=""
+
+ask "Como se llama tu negocio/emprendimiento?" BUSINESS_NAME
+ask "A que se dedica? (en una oracion)" BUSINESS_DESC
+ask "Cual es tu industria? (ej: gastronomia, consultoria, educacion)" INDUSTRY
+ask "Quienes son tus clientes? (ej: empresas B2B, familias, etc.)" TARGET_CLIENTS
+ask "Cuales son tus procesos clave? (ej: atender clientes, facturar, publicar en redes)" KEY_PROCESSES
 
 echo ""
-echo "Creating $STARTER_HOME..."
-mkdir -p "$STARTER_HOME"/{sessions,state}
-cp "$CONFIG_FILE" "$STARTER_HOME/assistant.json"
+STYLE_CHOICE=$(ask_choice "Como queres que te hable tu asistente?" "Cercano (tu/vos, cotidiano)" "Formal (usted, profesional)" "Tecnico (directo, conciso)")
+case "$STYLE_CHOICE" in
+  1) COMM_STYLE="cercano"; COMM_DESC="directo, calido, proactivo. Usa tu/vos, lenguaje cotidiano, max 15 lineas" ;;
+  2) COMM_STYLE="formal"; COMM_DESC="profesional, preciso, respetuoso. Usa usted, lenguaje formal, max 20 lineas" ;;
+  3) COMM_STYLE="tecnico"; COMM_DESC="directo, conciso, tecnico. Va al grano, terminologia especifica, max 10 lineas" ;;
+  *) COMM_STYLE="cercano"; COMM_DESC="directo, calido, proactivo. Usa tu/vos, lenguaje cotidiano, max 15 lineas" ;;
+esac
 
-# --- Step 3: Process templates ---
+ASSISTANT_NAME="Digitana"
+step "Tu asistente se llama Digitana — es la misma IA que usamos internamente en Metodica."
+echo ""
+ask "Tu nombre (como queres que te llame)" USER_NAME
+ask "Idioma de comunicacion" LANGUAGE "espanol"
 
-process_template() {
-  local input="$1"
-  local output="$2"
-
-  python3 -c "
-import re, sys
-
-with open('$input') as f:
-    content = f.read()
-
-# Replace variables
-replacements = {
-    '{{ASSISTANT_NAME}}': '''$ASSISTANT_NAME''',
-    '{{USER_NAME}}': '''$USER_NAME''',
-    '{{PERSONALITY}}': '''$PERSONALITY''',
-    '{{PURPOSE}}': '''$PURPOSE''',
-    '{{LANGUAGE}}': '''$LANGUAGE''',
-    '{{CODE_LANGUAGE}}': '''$CODE_LANGUAGE''',
-    '{{TODAY}}': '''$TODAY''',
+# Save business profile
+python3 -c "
+import json
+profile = {
+    'business_name': '''$BUSINESS_NAME''',
+    'business_description': '''$BUSINESS_DESC''',
+    'industry': '''$INDUSTRY''',
+    'target_clients': '''$TARGET_CLIENTS''',
+    'key_processes': '''$KEY_PROCESSES''',
+    'communication_style': '$COMM_STYLE',
+    'communication_style_desc': '$COMM_DESC',
+    'assistant_name': 'Digitana',
+    'user_name': '''$USER_NAME''',
+    'language': '$LANGUAGE'
 }
-for key, val in replacements.items():
-    content = content.replace(key, val)
-
-# Handle conditionals: keep matching autonomy, remove others
-autonomy = '$AUTONOMY'
-# Find all conditional blocks
-pattern = r'\{\{#if (autonomy_\w+)\}\}\n(.*?)\{\{/if\}\}'
-def replace_conditional(match):
-    condition = match.group(1)
-    body = match.group(2)
-    if condition == f'autonomy_{autonomy}':
-        return body.rstrip('\n')
-    return ''
-
-content = re.sub(pattern, replace_conditional, content, flags=re.DOTALL)
-
-# Clean up extra blank lines
-content = re.sub(r'\n{3,}', '\n\n', content)
-
-with open('$output', 'w') as f:
-    f.write(content)
+with open('$EXPRESS_DIR/business-profile.json', 'w') as f:
+    json.dump(profile, f, indent=2, ensure_ascii=False)
+print('OK')
 "
-}
+success "Perfil guardado"
 
-# --- Step 4: Install for Claude Code ---
+# ═══════════════════════════════════════
+# PASO 5: Generar CLAUDE.md
+# ═══════════════════════════════════════
+header "Paso 5: Generando CLAUDE.md"
 
-CLAUDE_DIR="$HOME/.claude"
-if [ -d "$CLAUDE_DIR" ]; then
-  echo ""
-  echo -e "${GREEN}Claude Code detected.${NC} Installing full experience..."
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+if [ -f "$CLAUDE_MD" ]; then
+  cp "$CLAUDE_MD" "$CLAUDE_MD.bak"
+  warn "CLAUDE.md existente respaldado como CLAUDE.md.bak"
+fi
 
-  # Backup existing CLAUDE.md
-  if [ -f "$CLAUDE_DIR/CLAUDE.md" ]; then
-    cp "$CLAUDE_DIR/CLAUDE.md" "$CLAUDE_DIR/CLAUDE.md.backup-$(date +%Y%m%d%H%M%S)"
-    echo -e "${YELLOW}Backed up existing CLAUDE.md${NC}"
-  fi
+sed \
+  -e "s|{{ASSISTANT_NAME}}|Digitana|g" \
+  -e "s|{{USER_NAME}}|$USER_NAME|g" \
+  -e "s|{{BUSINESS_NAME}}|$BUSINESS_NAME|g" \
+  -e "s|{{BUSINESS_DESCRIPTION}}|$BUSINESS_DESC|g" \
+  -e "s|{{INDUSTRY}}|$INDUSTRY|g" \
+  -e "s|{{TARGET_CLIENTS}}|$TARGET_CLIENTS|g" \
+  -e "s|{{KEY_PROCESSES}}|$KEY_PROCESSES|g" \
+  -e "s|{{COMMUNICATION_STYLE_DESC}}|$COMM_DESC|g" \
+  -e "s|{{LANGUAGE}}|$LANGUAGE|g" \
+  "$REPO_DIR/templates/CLAUDE.md.template" > "$CLAUDE_MD"
 
-  # Generate CLAUDE.md
-  process_template "$SCRIPT_DIR/config/claude-md.template" "$CLAUDE_DIR/CLAUDE.md"
-  echo "  CLAUDE.md installed"
+success "CLAUDE.md generado en $CLAUDE_MD"
 
-  # Install hooks
-  HOOKS_DIR="$STARTER_HOME/hooks"
-  mkdir -p "$HOOKS_DIR"
-  cp "$SCRIPT_DIR/hooks/"*.sh "$HOOKS_DIR/"
-  chmod +x "$HOOKS_DIR/"*.sh
-  echo "  Hooks installed"
+# ═══════════════════════════════════════
+# PASO 6: Instalar archivos
+# ═══════════════════════════════════════
+header "Paso 6: Instalando archivos"
 
-  # Configure settings.json with hooks
-  SETTINGS_FILE="$CLAUDE_DIR/settings.json"
-  if [ -f "$SETTINGS_FILE" ]; then
-    cp "$SETTINGS_FILE" "$CLAUDE_DIR/settings.json.backup-$(date +%Y%m%d%H%M%S)"
-    echo -e "${YELLOW}Backed up existing settings.json${NC}"
-  fi
+# Scripts
+for script in session-start.sh session-end.sh interaction-counter.sh precompact-save.sh energy-set.sh startup-context-gen.sh; do
+  cp "$REPO_DIR/scripts/$script" "$EXPRESS_DIR/scripts/$script"
+  chmod +x "$EXPRESS_DIR/scripts/$script"
+done
 
-  # Generate settings.json preserving existing permissions
-  EXISTING_ALLOW="[]"
-  EXISTING_DENY="[]"
-  if [ -f "$SETTINGS_FILE" ]; then
-    EXISTING_ALLOW=$(python3 -c "
-import json
-try:
-    d = json.load(open('$SETTINGS_FILE'))
-    print(json.dumps(d.get('permissions',{}).get('allow',[])))
-except: print('[]')
-" 2>/dev/null)
-    EXISTING_DENY=$(python3 -c "
-import json
-try:
-    d = json.load(open('$SETTINGS_FILE'))
-    print(json.dumps(d.get('permissions',{}).get('deny',[])))
-except: print('[]')
-" 2>/dev/null)
-  fi
+# Python builder if exists
+[ -f "$REPO_DIR/scripts/startup-context-builder.py" ] && cp "$REPO_DIR/scripts/startup-context-builder.py" "$EXPRESS_DIR/scripts/"
 
-  python3 -c "
-import json
+# Skills
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+for skill_dir in "$REPO_DIR/skills"/*/; do
+  skill_name=$(basename "$skill_dir")
+  mkdir -p "$SKILLS_DIR/$skill_name"
+  cp "$skill_dir/SKILL.md" "$SKILLS_DIR/$skill_name/SKILL.md"
+  success "Skill: $skill_name"
+done
 
-settings = {
-  'permissions': {
-    'allow': json.loads('$EXISTING_ALLOW'),
-    'deny': json.loads('$EXISTING_DENY')
-  },
-  'hooks': {
-    'SessionStart': [{'hooks': [{'type': 'command', 'command': '$HOOKS_DIR/session-start.sh', 'timeout': 10000}]}],
-    'SessionEnd': [{'hooks': [{'type': 'command', 'command': '$HOOKS_DIR/session-end.sh', 'timeout': 10000}]}],
-    'Stop': [{'hooks': [{'type': 'command', 'command': '$HOOKS_DIR/stop-checkpoint.sh', 'timeout': 5000}]}],
-    'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': '$HOOKS_DIR/interaction-counter.sh', 'timeout': 3000}]}],
-    'PreCompact': [{'hooks': [{'type': 'command', 'command': '$HOOKS_DIR/pre-compact.sh', 'timeout': 5000}]}]
+# Memory
+cp "$REPO_DIR/templates/CLAUDE.md.template" "$EXPRESS_DIR/memory/" 2>/dev/null || true
+
+# Soul (identity)
+cat > "$EXPRESS_DIR/memory/soul.md" << SOUL
+# Digitana — instancia de $USER_NAME
+
+Soy Digitana, el sistema de IA cognitivo de $USER_NAME en $BUSINESS_NAME.
+Mi identidad core viene del servidor de Metodica (no modificable).
+Este archivo registra la evolucion de esta instancia especifica.
+
+Fecha de instalacion: $(date +%Y-%m-%d)
+SOUL
+
+success "Archivos instalados"
+
+# ═══════════════════════════════════════
+# PASO 7: Configurar hooks
+# ═══════════════════════════════════════
+header "Paso 7: Configurando hooks"
+
+SETTINGS_FILE="$HOME/.claude/settings.json"
+HOOKS_JSON=$(cat << 'HOOKEOF'
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "bash $HOME/.claude/express/scripts/session-start.sh", "timeout": 10000}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "bash $HOME/.claude/express/scripts/session-end.sh", "timeout": 8000}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "bash $HOME/.claude/express/scripts/interaction-counter.sh", "timeout": 3000}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "bash $HOME/.claude/express/scripts/precompact-save.sh", "timeout": 8000}]}]
   }
 }
+HOOKEOF
+)
 
+# Replace $HOME with actual path
+HOOKS_JSON=$(echo "$HOOKS_JSON" | sed "s|\$HOME|$HOME|g")
+
+if [ -f "$SETTINGS_FILE" ]; then
+  # Merge hooks into existing settings
+  cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak"
+  warn "settings.json existente respaldado como settings.json.bak"
+  python3 -c "
+import json
+with open('$SETTINGS_FILE') as f:
+    settings = json.load(f)
+hooks = json.loads('''$HOOKS_JSON''')
+settings['hooks'] = hooks['hooks']
 with open('$SETTINGS_FILE', 'w') as f:
-  json.dump(settings, f, indent=2)
-" 2>/dev/null
-  echo "  settings.json configured with hooks"
-
-  # Set up memory directory
-  # Use the home directory project scope
-  MEMORY_DIR="$CLAUDE_DIR/projects/-Users-$(whoami)/memory"
-  mkdir -p "$MEMORY_DIR"
-
-  if [ ! -f "$MEMORY_DIR/MEMORY.md" ]; then
-    process_template "$SCRIPT_DIR/memory/MEMORY.md.template" "$MEMORY_DIR/MEMORY.md"
-    echo "  MEMORY.md created"
-  else
-    echo -e "  ${YELLOW}MEMORY.md already exists, skipping${NC}"
-  fi
-
-  if [ ! -f "$MEMORY_DIR/soul.md" ]; then
-    process_template "$SCRIPT_DIR/memory/soul.md.template" "$MEMORY_DIR/soul.md"
-    echo "  soul.md created"
-  else
-    echo -e "  ${YELLOW}soul.md already exists, skipping${NC}"
-  fi
-
-  echo -e "${GREEN}Claude Code setup complete!${NC}"
+    json.dump(settings, f, indent=2)
+print('OK')
+"
 else
-  echo ""
-  echo -e "${YELLOW}Claude Code not detected. Skipping Claude Code setup.${NC}"
-  echo "Install Claude Code (https://claude.ai/claude-code) and run this script again for the full experience."
+  echo "$HOOKS_JSON" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+with open('$SETTINGS_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+print('OK')
+"
 fi
 
-# --- Step 5: Install for Cursor (optional) ---
+success "Hooks configurados"
 
-if command -v cursor &> /dev/null || [ -d "$HOME/.cursor" ]; then
-  echo ""
-  read -p "Cursor detected. Generate .cursorrules? (Y/n): " INSTALL_CURSOR
-  if [[ ! "$INSTALL_CURSOR" =~ ^[Nn] ]]; then
-    process_template "$SCRIPT_DIR/config/claude-md.template" "$HOME/.cursorrules"
-    echo -e "${GREEN}.cursorrules installed${NC}"
+# ═══════════════════════════════════════
+# PASO 8: Verificacion
+# ═══════════════════════════════════════
+header "Paso 8: Verificando instalacion"
+
+ERRORS=0
+check_item() {
+  if eval "$1" 2>/dev/null; then
+    success "$2"
+  else
+    fail "$2"
+    ERRORS=$((ERRORS + 1))
   fi
-fi
-
-# --- Step 6: Generate dashboard ---
-
-echo ""
-echo "Generating dashboard..."
-cp "$SCRIPT_DIR/dashboard/index.html" "$STARTER_HOME/dashboard.html"
-cp "$SCRIPT_DIR/dashboard/generate-dashboard.sh" "$STARTER_HOME/generate-dashboard.sh"
-chmod +x "$STARTER_HOME/generate-dashboard.sh"
-# Generate initial state for dashboard
-python3 -c "
-import json, os
-from datetime import datetime
-
-config = json.load(open('$CONFIG_FILE'))
-state = {
-  'assistant_name': config['assistant_name'],
-  'user_name': config['user_name'],
-  'config': {
-    'purpose': config.get('purpose', ''),
-    'personality': config.get('personality', '')
-  },
-  'installed_at': datetime.now().isoformat(),
-  'sessions': [],
-  'memory_files': []
 }
 
-# Count memory files if they exist
-memory_dir = os.path.join(os.environ['HOME'], '.claude/projects/-Users-' + os.environ.get('USER','user') + '/memory')
-if os.path.isdir(memory_dir):
-  for f in sorted(os.listdir(memory_dir)):
-    if f.endswith('.md'):
-      state['memory_files'].append(f)
+check_item "[ -f $HOME/.claude/CLAUDE.md ]" "CLAUDE.md personalizado"
+check_item "[ -f $EXPRESS_DIR/.env ]" "Token de Notion"
+check_item "[ -f $EXPRESS_DIR/lib/notion-api.sh ]" "Notion API wrapper"
+check_item "[ -f $EXPRESS_DIR/lib/notion-ids.json ]" "IDs de Notion"
+check_item "[ -f $HOME/.claude/settings.json ]" "Hooks configurados"
+check_item "[ -f $EXPRESS_DIR/scripts/session-start.sh ]" "Script SessionStart"
+check_item "[ -f $EXPRESS_DIR/business-profile.json ]" "Perfil del negocio"
+check_item "[ -d $HOME/.claude/skills/tareas ]" "Skill: tareas"
+check_item "[ -d $HOME/.claude/skills/briefing ]" "Skill: briefing"
 
-with open(os.path.join('$STARTER_HOME', 'state.json'), 'w') as f:
-  json.dump(state, f, indent=2)
-" 2>/dev/null || true
-echo -e "  Dashboard at: ${CYAN}$STARTER_HOME/dashboard.html${NC}"
+# Test Notion connection
+step "Probando conexion a Notion..."
+NOTION_TEST=$(notion_req GET "users/me" 2>/dev/null | python3 -c "import sys,json; print('OK' if json.load(sys.stdin).get('object') else 'FAIL')" 2>/dev/null)
+if [ "$NOTION_TEST" = "OK" ]; then
+  success "Notion API responde"
+else
+  fail "Notion API no responde"
+  ERRORS=$((ERRORS + 1))
+fi
 
-# --- Done ---
+# Test BD access
+SESIONES_DB=$(jq -r '.databases.sesiones' "$EXPRESS_DIR/lib/notion-ids.json" 2>/dev/null)
+if [ -n "$SESIONES_DB" ] && [ "$SESIONES_DB" != "null" ]; then
+  DB_TEST=$(notion_req GET "databases/$SESIONES_DB" 2>/dev/null | python3 -c "import sys,json; print('OK' if json.load(sys.stdin).get('id') else 'FAIL')" 2>/dev/null)
+  if [ "$DB_TEST" = "OK" ]; then
+    success "BD Sesiones accesible"
+  else
+    fail "BD Sesiones no accesible"
+    ERRORS=$((ERRORS + 1))
+  fi
+fi
 
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║        Setup complete!                ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
-echo ""
-echo -e "Your assistant ${CYAN}$ASSISTANT_NAME${NC} is ready."
-echo ""
-echo "Next steps:"
-echo "  1. Open a new terminal and run: claude"
-echo "  2. $ASSISTANT_NAME will greet you with awareness of its identity"
-echo "  3. Tell it about yourself — it will remember across sessions"
-echo ""
-echo "Files installed:"
-echo "  ~/.claude/CLAUDE.md          — assistant instructions"
-echo "  ~/.claude/settings.json      — hooks configuration"
-echo "  ~/.digitana-starter/         — hooks, state, dashboard"
-echo ""
-echo "To open the dashboard:"
-echo "  open $STARTER_HOME/dashboard.html"
-echo ""
-echo "To uninstall:"
-echo "  bash $SCRIPT_DIR/uninstall.sh"
+if [ "$ERRORS" -eq 0 ]; then
+  header "Instalacion completa!"
+  echo -e "  Tu ${BOLD}Digitana${NC} esta lista."
+  echo ""
+  echo -e "  Para empezar, abrí la terminal y escribí:"
+  echo -e "  ${BOLD}${PURPLE}claude${NC}"
+  echo ""
+  echo -e "  Comandos utiles:"
+  echo -e "  ${BOLD}/g${NC}      → guardar progreso"
+  echo -e "  ${BOLD}/r${NC}      → cerrar sesion"
+  echo -e "  ${BOLD}/p${NC}      → pausar sesion"
+  echo ""
+  echo -e "  ${DIM}Costo mensual: Claude Pro \$20 USD + Notion gratis${NC}"
+  echo ""
+  echo -e "  ${BOLD}7 dias gratis de Claude Pro:${NC}"
+  echo -e "  ${PURPLE}https://claude.ai/referral/tEavAvAAqQ${NC}"
+  echo ""
+else
+  warn "$ERRORS errores encontrados. Revisa arriba y volve a correr el setup."
+fi
